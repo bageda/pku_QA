@@ -1,0 +1,251 @@
+import numpy as np
+import random
+
+#path = "/root/data/like_insuranceQA/"     #linux
+path = "/Users/qx/data/"
+
+empty_vector = []
+for i in range(0, 100):
+    empty_vector.append(float(0.0))
+onevector = []
+for i in range(0, 10):
+    onevector.append(float(1))
+zerovector = []
+for i in range(0, 10):
+    zerovector.append(float(0))
+
+##生成train、test1.sample中 问题的 {词：计数} 字典   计数为不重复的词计数，而不是词总数
+def build_vocab():
+    code = int(0)       #同时起到 编码 计数作用
+    vocab = {}
+    vocab['UNKNOWN'] = code
+    code += 1
+    for line in open(path + 'train'):
+        items = line.strip().split(' ')      #将train中问答对分开生成list
+        for i in range(1):
+            words = items[i].split('_')      #取出问题句子，生成 词 list
+            for word in words:              #将词 加入字典，值为其计数，同时计数加1
+                if not word in vocab:
+                    vocab[word] = code
+                    code += 1
+    for line in open(path + 'test1.sample'):
+        items = line.strip().split(' ')
+        for i in range(1):
+            words = items[i].split('_')
+            for word in words:
+                if not word in vocab:
+                    vocab[word] = code
+                    code += 1
+    return vocab
+
+##从Q或A句子list中随机取一个
+def rand_qa(qalist):
+    index = random.randint(0, len(qalist) - 1)
+    return qalist[index]
+
+##从train中取出答案句子，生成list
+def read_alist():
+    alist = []
+    for line in open(path + 'train'):
+        if not line.strip():continue             #如句子为空则直接下一次循环，不进行操作
+        items = line.strip().split(" ")                       #一行Q A 句子
+        if len(items) < 2:continue               #如问答对不全（items元素少于2）则直接下一次循环，不进行操作
+        alist.append(items[1])                    #提取答案部分
+    print('read_alist done ......')
+    return alist
+
+def vocab_plus_overlap(vectors, sent, over, size):
+    global onevector
+    global zerovector
+    oldict = {}
+    words = over.split('_')
+    if len(words) < size:
+        size = len(words)
+    for i in range(0, size):
+        if words[i] == '<a>':
+            continue
+        oldict[words[i]] = '#'
+    matrix = []
+    words = sent.split('_')
+    if len(words) < size:
+        size = len(words)
+    for i in range(0, size):
+        vec = read_vector(vectors, words[i])
+        newvec = vec.copy()
+        #if words[i] in oldict:
+        #    newvec += onevector
+        #else:
+        #    newvec += zerovector
+        matrix.append(newvec)
+    return matrix
+
+##将用train训练字向量转为 {字：向量}返回
+def load_vectors():
+    vectors = {}
+    for line in open(path + 'vectors.nobin'):
+        if line.strip() == "":continue
+        items = line.strip().split(' ')
+        if (len(items) < 101):
+            continue
+        vec = []
+        for i in range(1, 101):
+            vec.append(float(items[i]))
+        vectors[items[0]] = vec
+    return vectors
+
+def read_vector(vectors, word):
+    global empty_vector
+    if word in vectors:
+        return vectors[word]
+    else:
+        return empty_vector
+        #return vectors['</s>']
+
+##将测试文本转为list，和{字：向量} 一起返回
+def load_test_and_vectors():
+    testList = []
+    for line in open(path + 'test1.sample'):
+        if line.strip() == "":continue
+        testList.append(line.strip())
+    vectors = load_vectors()
+    return testList, vectors
+
+def load_train_and_vectors():
+    trainList = []
+    for line in open(path + 'train'):
+        trainList.append(line.strip())
+    vectors = load_vectors()
+    return trainList, vectors
+
+def load_data_val_10(testList, vectors, index):
+    x_train_1 = []
+    x_train_2 = []
+    x_train_3 = []
+    items = testList[index].split(' ')
+    x_train_1.append(vocab_plus_overlap(vectors, items[0], items[2], 200))
+    x_train_2.append(vocab_plus_overlap(vectors, items[2], items[0], 200))
+    x_train_3.append(vocab_plus_overlap(vectors, items[2], items[0], 200))
+    return np.array(x_train_1), np.array(x_train_2), np.array(x_train_3)
+
+## 读取train中的所有问答对，生成[Q,A] list,然后存入list [[Q,A] ,[Q,A] ]
+def read_raw():
+    raw = []
+    for line in open(path + 'train'):
+        if not line.strip():continue
+        items = line.strip().split(' ')
+#        if items[0] == '1':
+        raw.append(items)                 #存入list的 也是list[Q,A]
+    return raw
+
+##参数含义：train中问题的{词：数}字典， Q 或 A 句子 ， 一个批次的句子数
+##将传入的句子生成词list（200个），将词 在 train中{词：数}对应的 值存入 list返回
+def encode_sent(vocab, string, size):
+    x = []
+    words = string.split('_')       #将Q 或 A 的句子生成词list （200个词）
+    for i in range(0, 200):
+        if len(words) < 201:continue   #确保非空
+        if words[i] in vocab:          #如果句子中的词在 train中问题的{词：数}字典内，就将词在 {}中对应的值加入list，否则为0
+            x.append(vocab[words[i]])
+        else:
+            x.append(vocab['UNKNOWN'])
+    return x
+
+##参数含义：train中问题的{词：数}字典， train中答案句子list，train中[[Q,A],[Q,A]], 一个批次的句子数
+#返回3个有100个元素的list，
+"""
+x_train_1:含有100个元素的list，元素也是list（200个），由train中随机QA pair中问题句子的 词 对应 {词：数}字典的值生成
+x_train_2:含有100个元素的list，元素也是list（200个），由train中随机QA pair中答案句子的 词 对应 {词：数}字典的值生成
+x_train_3:含有100个元素的list，元素也是list（200个），由train中随机答案句子的 词 对应 {词：数}字典的值生成
+"""
+def load_data_6(vocab, alist, raw, size):
+    x_train_1 = []
+    x_train_2 = []
+    x_train_3 = []
+    for i in range(0, size):
+        items = raw[random.randint(0, len(raw) - 1)]
+#从train [[Q,A],[Q,A]]随机取一个 QA pair（也为list）
+        nega = rand_qa(alist)              #从train中的 答案句子list中随机取一个作为负向答案
+        x_train_1.append(encode_sent(vocab, items[0], 100))
+#将QA pair中问题的词 转为 train中{词：数}对应的数（200个），存入list
+        x_train_2.append(encode_sent(vocab, items[1], 100))
+#将QA pair中答案的词 转为 train中{词：数}对应的数（200个），存入list
+        x_train_3.append(encode_sent(vocab, nega, 100))
+#将负向答案中的词转为 train中{词：数}对应的数（200个），存入list
+    return np.array(x_train_1), np.array(x_train_2), np.array(x_train_3)
+
+def load_data_val_6(testList, vocab, index, batch):
+    x_train_1 = []
+    x_train_2 = []
+    x_train_3 = []
+    for i in range(0, batch):
+        true_index = index + i
+        if (true_index >= len(testList)):
+            true_index = len(testList) - 1
+        items = testList[true_index].split(' ')
+        x_train_1.append(encode_sent(vocab, items[0], 100))
+        x_train_2.append(encode_sent(vocab, items[0], 100))
+        x_train_3.append(encode_sent(vocab, items[0], 100))
+    return np.array(x_train_1), np.array(x_train_2), np.array(x_train_3)
+
+def load_data_9(trainList, vectors, size):
+    x_train_1 = []
+    x_train_2 = []
+    y_train = []
+    for i in range(0, size):
+        pos = trainList[random.randint(0, len(trainList) - 1)]
+        posItems = pos.strip().split(' ')
+        x_train_1.append(vocab_plus_overlap(vectors, posItems[0], posItems[2], 200))
+        x_train_2.append(vocab_plus_overlap(vectors, posItems[2], posItems[0], 200))
+        y_train.append([1, 0])
+        neg = trainList[random.randint(0, len(trainList) - 1)]
+        negItems = neg.strip().split(' ')
+        x_train_1.append(vocab_plus_overlap(vectors, posItems[0], negItems[2], 200))
+        x_train_2.append(vocab_plus_overlap(vectors, negItems[2], posItems[0], 200))
+        y_train.append([0, 1])
+    return np.array(x_train_1), np.array(x_train_2), np.array(y_train)
+
+def load_data_val_9(testList, vectors, index):
+    x_train_1 = []
+    x_train_2 = []
+    items = testList[index].split(' ')
+    x_train_1.append(vocab_plus_overlap(vectors, items[0], items[2], 200))
+    x_train_2.append(vocab_plus_overlap(vectors, items[2], items[0], 200))
+    return np.array(x_train_1), np.array(x_train_2)
+
+def load_data_10(vectors, qalist, raw, size):
+    x_train_1 = []
+    x_train_2 = []
+    x_train_3 = []
+    items = raw[random.randint(0, len(raw) - 1)]
+    nega = rand_qa(qalist)
+    x_train_1.append(vocab_plus_overlap(vectors, items[0], items[2], 200))
+    x_train_2.append(vocab_plus_overlap(vectors, items[2], items[0], 200))
+    x_train_3.append(vocab_plus_overlap(vectors, nega, items[0], 200))
+    return np.array(x_train_1), np.array(x_train_2), np.array(x_train_3)
+
+def load_data_11(vectors, qalist, raw, size):
+    x_train_1 = []
+    x_train_2 = []
+    x_train_3 = []
+    items = raw[random.randint(0, len(raw) - 1)]
+    nega = rand_qa(qalist)
+    x_train_1.append(vocab_plus_overlap(vectors, items[0], items[2], 200))
+    x_train_2.append(vocab_plus_overlap(vectors, items[2], items[0], 200))
+    x_train_3.append(vocab_plus_overlap(vectors, nega, items[0], 200))
+    return np.array(x_train_1), np.array(x_train_2), np.array(x_train_3)
+
+def batch_iter(data, batch_size, num_epochs, shuffle=True):
+    data = np.array(data)
+    data_size = len(data)
+    num_batches_per_epoch = int(len(data)/batch_size) + 1
+    for epoch in range(num_epochs):
+        # Shuffle the data at each epoch
+        if shuffle:
+            shuffle_indices = np.random.permutation(np.arange(data_size))
+            shuffled_data = data[shuffle_indices]
+        else:
+            shuffled_data = data
+        for batch_num in range(num_batches_per_epoch):
+            start_index = batch_num * batch_size
+            end_index = min((batch_num + 1) * batch_size, data_size)
+            yield shuffled_data[start_index:end_index]
